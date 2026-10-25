@@ -28,14 +28,30 @@ function decodeXml(value: string): string {
     .trim();
 }
 
+// Temporary: what each YouTube request returned, exposed via /api/youtube-live?debug=1
+export const youtubeDiagnostics: Array<Record<string, unknown>> = [];
+
 async function fetchText(url: string): Promise<string | null> {
   try {
     const response = await fetch(url, {
       headers: { "User-Agent": USER_AGENT, "Accept-Language": "en" },
       next: { revalidate: REVALIDATE_SECONDS }
     });
-    return response.ok ? await response.text() : null;
-  } catch {
+    const text = await response.text();
+    youtubeDiagnostics.push({
+      url,
+      status: response.status,
+      finalUrl: response.url,
+      length: text.length,
+      canonical: text.match(/<link rel="canonical" href="([^"]+)"/)?.[1] ?? null,
+      isLive: /"isLive":true/.test(text),
+      isLiveNow: /"isLiveNow":true/.test(text),
+      botCheck: /confirm you.re not a bot|consent\.youtube\.com/i.test(text),
+      entries: text.split("<entry>").length - 1
+    });
+    return response.ok ? text : null;
+  } catch (error) {
+    youtubeDiagnostics.push({ url, error: String(error) });
     return null;
   }
 }
