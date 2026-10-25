@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { readSettings } from "@/lib/settings";
-import { DEFAULT_CHANNEL_ID, fetchChannelStreams, fetchCurrentLive, youtubeDiagnostics } from "@/lib/youtube";
+import { DEFAULT_CHANNEL_ID, fetchChannelStatus } from "@/lib/youtube";
 
 // Cached at the CDN so visitors polling every 30s don't each hit YouTube / Blob.
 const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" };
@@ -12,14 +12,12 @@ type LiveResponse = {
   previousMessages: Array<{ title: string; embedUrl: string }>;
 };
 
-export async function GET(request: Request) {
-  const debug = new URL(request.url).searchParams.has("debug");
+export async function GET() {
   try {
-    if (debug) youtubeDiagnostics.length = 0;
     const settings = await readSettings();
     const channelId = settings.channelId || process.env.YOUTUBE_CHANNEL_ID || DEFAULT_CHANNEL_ID;
 
-    const [live, streams] = await Promise.all([fetchCurrentLive(channelId), fetchChannelStreams(channelId)]);
+    const { live, streams } = await fetchChannelStatus(channelId);
 
     // Priority: actually live on YouTube > URL pinned in admin panel > latest past stream.
     let body: LiveResponse;
@@ -38,9 +36,6 @@ export async function GET(request: Request) {
       : settings.liveHistory.map(({ title, embedUrl }) => ({ title, embedUrl }));
     body.previousMessages = pastStreams.filter((item) => item.embedUrl !== body.embedUrl).slice(0, 3);
 
-    if (debug) {
-      return NextResponse.json({ ...body, diagnostics: youtubeDiagnostics }, { headers: { "Cache-Control": "no-store" } });
-    }
     return NextResponse.json(body, { headers: CACHE_HEADERS });
   } catch {
     return NextResponse.json(
