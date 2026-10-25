@@ -169,3 +169,74 @@ async function fetchLiveFromPage(channelId: string): Promise<YoutubeVideo | null
   const title = decodeXml(html.match(/<meta name="title" content="([^"]*)"/)?.[1] ?? "");
   return toVideo(videoId, title);
 }
+
+// ---------- Popular songs ----------
+// Songs aren't in a playlist on the channel, so they're picked from all uploads by
+// title ("Song", "పాట", "ఆరాధన"...) and length (2–20 min drops full services/messages
+// that mention "worship"), then ranked by views. Refreshed once a day (~20 quota units).
+
+const SONG_TITLE = /\bsongs?\b|పాట|ఆరాధన|కీర్తన|గీతం|\bworship\b|\blyrics?\b/i;
+const SONG_MIN_SECONDS = 120;
+const SONG_MAX_SECONDS = 20 * 60;
+const SONGS_REVALIDATE_SECONDS = 24 * 60 * 60;
+
+function durationSeconds(iso: string): number {
+  const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return 0;
+  return (Number(match[1]) || 0) * 3600 + (Number(match[2]) || 0) * 60 + (Number(match[3]) || 0);
+}
+
+async function dailyApi<T>(path: string, params: Record<string, string>, key: string): Promise<T | null> {
+  const url = new URL(`https://www.googleapis.com/youtube/v3/${path}`);
+  for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
+  url.searchParams.set("key", key);
+  try {
+    const response = await fetch(url, { next: { revalidate: SONGS_REVALIDATE_SECONDS } });
+    return response.ok ? ((await response.json()) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchPopularSongs(channelId: string, limit = 6): Promise<YoutubeVideo[]> {
+  if (!API_KEY) return [];
+  const uploads = `UU${channelId.replace(/^UC/, "")}`;
+
+  const ids: string[] = [];
+  let pageToken = "";
+  do {
+    const page = await dailyApi<{ nextPageToken?: string; items?: Array<{ contentDetails?: { videoId?: string } }> }>(
+      "playlistItems",
+      { part: "contentDetails", playlistId: uploads, maxResults: "50", ...(pageToken ? { pageToken } : {}) },
+      API_KEY
+    );
+    if (!page) break;
+    for (const item of page.items ?? []) if (item.contentDetails?.videoId) ids.push(item.contentDetails.videoId);
+    pageToken = page.nextPageToken ?? "";
+  } while (pageToken);
+
+  const songs: Array<YoutubeVideo & { views: number }> = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const data = await dailyApi<{
+      items?: Array<{
+        id: string;
+        snippet?: { title?: string; publishedAt?: string };
+        contentDetails?: { duration?: string };
+        statistics?: { viewCount?: string };
+      }>;
+    }>("videos", { part: "snippet,contentDetails,statistics", id: ids.slice(i, i + 50).join(",") }, API_KEY);
+
+    for (const video of data?.items ?? []) {
+      const title = video.snippet?.title ?? "";
+      const seconds = durationSeconds(video.contentDetails?.duration ?? "");
+      if (SONG_TITLE.test(title) && seconds >= SONG_MIN_SECONDS && seconds <= SONG_MAX_SECONDS) {
+        songs.push({ ...toVideo(video.id, title, video.snippet?.publishedAt), views: Number(video.statistics?.viewCount) || 0 });
+      }
+    }
+  }
+
+  return songs
+    .sort((a, b) => b.views - a.views)
+    .slice(0, limit)
+    .map(({ views: _views, ...video }) => video);
+}

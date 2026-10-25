@@ -47,7 +47,7 @@ type LiveStatusResponse = {
 
 function cleanMessageTitle(title: string): string {
   const cleaned = title
-    .replace(/^[^A-Za-z0-9]+/, "")
+    .replace(/^[\p{So}\p{P}\s]+/u, "") // leading emoji/symbols only, keeps Telugu titles
     .replace(/\s*\|\|\s*\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/g, "")
     .replace(/\s+\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/g, "")
     .replace(/\s+/g, " ")
@@ -87,6 +87,23 @@ function VideoCard({ title, embedUrl }: VideoCardProps) {
 
 export default function YouTubeHighlights() {
   const [messages, setMessages] = useState(popularMessages);
+  const [songs, setSongs] = useState(popularSongs);
+
+  useEffect(() => {
+    let mounted = true;
+
+    // Most-viewed songs on the channel, picked automatically (falls back to the list above).
+    fetch("/api/youtube-songs")
+      .then((response) => response.json() as Promise<{ songs?: VideoCardProps[] }>)
+      .then((data) => {
+        if (mounted && data.songs?.length) setSongs(data.songs);
+      })
+      .catch(() => {});
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -132,8 +149,8 @@ export default function YouTubeHighlights() {
             <h3 className="text-3xl font-semibold text-navy md:text-4xl">Popular Songs</h3>
           </div>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {popularSongs.map((video) => (
-              <VideoCard key={`song-${video.title}`} title={video.title} embedUrl={video.embedUrl} />
+            {songs.map((video, index) => (
+              <VideoCard key={`song-${index}-${video.embedUrl}`} title={video.title} embedUrl={video.embedUrl} />
             ))}
           </div>
         </div>
